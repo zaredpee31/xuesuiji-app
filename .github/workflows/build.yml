@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,6 +13,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Create signing key once
+        run: |
+          if [ ! -f app/xsj.jks ]; then
+            keytool -genkeypair -keystore app/xsj.jks -storetype PKCS12 -storepass xuesuiji -keypass xuesuiji -alias xsj -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Xuesuiji"
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add app/xsj.jks
+            git commit -m "add signing key [skip ci]"
+            git push
+          fi
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
