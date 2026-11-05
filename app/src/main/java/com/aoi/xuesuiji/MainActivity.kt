@@ -39,6 +39,38 @@ class MainActivity : ComponentActivity() {
     private val homeUrl = "https://weiguzhi1112.github.io/xuesuiji/"
     private val homeHost = "weiguzhi1112.github.io"
 
+    private val backJs = """
+        (function(){
+        try{
+          var q=function(s){return document.querySelector(s);};
+          var vis=function(e){return e&&e.offsetParent!==null;};
+          if(q('#sh.on')){shClose();return 'ok';}
+          if(q('#mpop')){mpClose();return 'ok';}
+          if(q('#msbar')){msEnd();return 'ok';}
+          if(q('#cc.open')){cc(0);return 'ok';}
+          var vc=q('#vcall.on');
+          if(vc){var mn=vc.querySelector('[data-cv=min]');if(mn){mn.click();}return 'ok';}
+          if(typeof locked!=='undefined'&&locked){return 'home';}
+          if(typeof cur==='undefined'||!cur){
+            if(typeof editing!=='undefined'&&editing){setEdit(0);return 'ok';}
+            return 'home';
+          }
+          var mf=q('#mu_f.on');
+          if(mf){var fb=mf.querySelector('[data-mu=fclose]');if(fb){fb.click();return 'ok';}}
+          if(q('#mu_md.on')){muClose();return 'ok';}
+          var root=q('#wx.open .v.on')||q('#st.open')||q('#sm.open')||q('#cr.open')||q('#app.open');
+          if(root){
+            var bs=root.querySelectorAll('[aria-label="返回"],[aria-label="关闭"],[data-a=back],[data-a=sback],[data-a=ofback],[data-mm=back],[data-wb=back],[data-pn=back],[data-mu=pback]');
+            for(var i=0;i<bs.length;i++){
+              if(vis(bs[i])&&!bs[i].closest('.mufull')){bs[i].click();return 'ok';}
+            }
+          }
+          homeBtn();
+          return 'ok';
+        }catch(e){return 'home';}
+        })()
+    """.trimIndent()
+
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
 
@@ -46,6 +78,7 @@ class MainActivity : ComponentActivity() {
     private var pendingMedia: PermissionRequest? = null
     private var geoOrigin: String? = null
     private var geoCallback: GeolocationPermissions.Callback? = null
+    private var lastHomeBack = 0L
 
     private val fileLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -92,9 +125,28 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else showMenu()
+                handleBack()
             }
         })
+    }
+
+    private fun handleBack() {
+        if (webView.canGoBack()) {
+            webView.goBack()
+            return
+        }
+        webView.evaluateJavascript(backJs) { r ->
+            val res = r?.trim('"') ?: ""
+            if (res == "ok") return@evaluateJavascript
+            val now = System.currentTimeMillis()
+            if (now - lastHomeBack < 2000) {
+                lastHomeBack = 0
+                showMenu()
+            } else {
+                lastHomeBack = now
+                Toast.makeText(this, "再返回一次打开菜单", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun setupWindow() {
