@@ -4,16 +4,23 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Base64
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.MimeTypeMap
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -31,7 +38,12 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -68,6 +80,41 @@ class MainActivity : ComponentActivity() {
           homeBtn();
           return 'ok';
         }catch(e){return 'home';}
+        })()
+    """.trimIndent()
+
+    private val dlJs = """
+        (function(){
+        if(window.__xsjHook||!window.XsjSaver)return;
+        window.__xsjHook=1;
+        function post(d,n){XsjSaver.postMessage(JSON.stringify({d:d,n:n||''}));}
+        window.__xsjSave=function(h,n){
+          try{
+            if(h.indexOf('data:')===0){post(h,n);return true;}
+            if(h.indexOf('blob:')===0){
+              var x=new XMLHttpRequest();
+              x.open('GET',h,true);
+              x.responseType='blob';
+              x.onload=function(){
+                var r=new FileReader();
+                r.onloadend=function(){post(r.result,n);};
+                r.readAsDataURL(x.response);
+              };
+              x.send();
+              return true;
+            }
+          }catch(e){}
+          return false;
+        };
+        var oc=HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click=function(){
+          if(this.hasAttribute('download')&&this.href&&window.__xsjSave(this.href,this.getAttribute('download')))return;
+          return oc.apply(this,arguments);
+        };
+        document.addEventListener('click',function(e){
+          var a=e.target&&e.target.closest&&e.target.closest('a[download]');
+          if(a&&a.href&&window.__xsjSave(a.href,a.getAttribute('download'))){e.preventDefault();e.stopImmediatePropagation();}
+        },true);
         })()
     """.trimIndent()
 
@@ -178,11 +225,104 @@ class MainActivity : ComponentActivity() {
             webViewClient = ShellClient()
             webChromeClient = ShellChromeClient()
         }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(
+                webView, "XsjSaver", setOf("https://$homeHost")
+            ) { _, message, _, _, _ ->
+                message.data?.let { saveFromJs(it) }
+            }
+        }
+        webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
+            when {
+                url.startsWith("data:") ->
+                    saveDataUrl(url, URLUtil.guessFileName(url, contentDisposition, mimetype))
+                url.startsWith("blob:") ->
+                    webView.evaluateJavascript(
+                        "window.__xsjSave&&window.__xsjSave(${JSONObject.quote(url)},'')", null
+                    )
+                else -> try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (_: Exception) {
+                }
+            }
+        }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
         }
         root.addView(webView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    }
+
+    private fun saveFromJs(raw: String) {
+        try {
+            val o = JSONObject(raw)
+            saveDataUrl(o.optString("d"), o.optString("n"))
+        } catch (_: Exception) {
+            Toast.makeText(this, "保存失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun saveDataUrl(url: String, name: String) {
+        Thread {
+            val where = try {
+                val comma = url.indexOf(',')
+                require(url.startsWith("data:") && comma > 0)
+                val meta = url.substring(5, comma)
+                val payload = url.substring(comma + 1)
+                val isB64 = meta.endsWith(";base64")
+                val mime = meta.removeSuffix(";base64").substringBefore(';')
+                    .ifBlank { "application/octet-stream" }
+                val bytes = if (isB64) Base64.decode(payload, Base64.DEFAULT)
+                else Uri.decode(payload).toByteArray()
+                writeDownload(cleanName(name, mime), mime, bytes)
+            } catch (_: Exception) {
+                null
+            }
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    if (where != null) "已保存到 $where" else "保存失败",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }.start()
+    }
+
+    private fun cleanName(name: String, mime: String): String {
+        val n = name.substringAfterLast('/')
+            .replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_")
+            .trim()
+            .take(120)
+        if (n.isNotEmpty()) return n
+        val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "bin"
+        return "雪穗机-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + "." + ext
+    }
+
+    private fun writeDownload(name: String, mime: String, bytes: ByteArray): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/雪穗机")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("insert failed")
+            try {
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("open failed")
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            } catch (e: Exception) {
+                contentResolver.delete(uri, null, null)
+                throw e
+            }
+            return "下载/雪穗机/$name"
+        }
+        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
+        val f = File(dir, name)
+        f.writeBytes(bytes)
+        return f.absolutePath
     }
 
     private inner class ShellClient : WebViewClient() {
@@ -194,6 +334,10 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) {
             }
             return true
+        }
+
+        override fun onPageFinished(view: WebView, url: String) {
+            if (Uri.parse(url).host == homeHost) view.evaluateJavascript(dlJs, null)
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
