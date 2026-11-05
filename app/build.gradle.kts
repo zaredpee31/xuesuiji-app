@@ -15,6 +15,15 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("xsj.jks")
+            storePassword = "xuesuiji"
+            keyAlias = "xsj"
+            keyPassword = "xuesuiji"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
