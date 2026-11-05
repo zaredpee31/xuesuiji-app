@@ -118,6 +118,81 @@ class MainActivity : ComponentActivity() {
         })()
     """.trimIndent()
 
+    private val scrollJs = """
+        (function(){
+        if(window.__xsjScroll||!document.body)return;
+        window.__xsjScroll=1;
+        var lastTouch=0,pend=null,timer=0;
+        ['touchstart','touchmove','wheel'].forEach(function(t){
+          document.addEventListener(t,function(){lastTouch=Date.now();},{passive:true,capture:true});
+        });
+        function idle(){return Date.now()-lastTouch>=800;}
+        function scroller(el){
+          while(el&&el!==document.body&&el!==document.documentElement){
+            if(el.nodeType===1){
+              var o=getComputedStyle(el).overflowY;
+              if((o==='auto'||o==='scroll'||o==='overlay')&&el.scrollHeight>el.clientHeight+2)return el;
+            }
+            el=el.parentElement;
+          }
+          return null;
+        }
+        function isChat(s){
+          var sr=s.getBoundingClientRect();
+          if(sr.height<200)return false;
+          var p=s.parentElement;
+          for(var i=0;i<5&&p;i++){
+            var f=p.querySelectorAll('textarea,input[type=text],input:not([type]),[contenteditable=true]');
+            for(var j=0;j<f.length;j++){
+              var e=f[j];
+              if(s.contains(e)||e.offsetParent===null)continue;
+              var r=e.getBoundingClientRect();
+              if(r.top>sr.top+sr.height*0.6&&r.bottom>innerHeight*0.6)return true;
+            }
+            p=p.parentElement;
+          }
+          return false;
+        }
+        function nearEnd(n,s){
+          var r=n.getBoundingClientRect();
+          if(!r.width&&!r.height)return false;
+          var sr=s.getBoundingClientRect();
+          return r.bottom-sr.top+s.scrollTop>=s.scrollHeight-300;
+        }
+        function toBottom(s){if(s.isConnected&&idle())s.scrollTop=s.scrollHeight;}
+        function run(){
+          var list=pend;pend=null;
+          if(!list||!idle())return;
+          list.forEach(function(s){
+            toBottom(s);
+            [80,250,600,1200].forEach(function(t){setTimeout(function(){toBottom(s);},t);});
+          });
+        }
+        function check(n){
+          var el=n.nodeType===1?n:n.parentElement;
+          if(!el||!el.isConnected)return;
+          var s=scroller(el);
+          while(s){
+            if(pend&&pend.indexOf(s)>=0)return;
+            if(isChat(s)){
+              if(nearEnd(el,s))(pend=pend||[]).push(s);
+              return;
+            }
+            s=scroller(s.parentElement);
+          }
+        }
+        new MutationObserver(function(ms){
+          for(var i=0;i<ms.length;i++){
+            var m=ms[i];
+            if(m.type==='characterData'){check(m.target);continue;}
+            var a=m.addedNodes;
+            for(var k=a.length-1;k>=0&&k>=a.length-20;k--)check(a[k]);
+          }
+          if(pend){clearTimeout(timer);timer=setTimeout(run,30);}
+        }).observe(document.body,{childList:true,subtree:true,characterData:true});
+        })()
+    """.trimIndent()
+
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
 
@@ -337,7 +412,10 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onPageFinished(view: WebView, url: String) {
-            if (Uri.parse(url).host == homeHost) view.evaluateJavascript(dlJs, null)
+            if (Uri.parse(url).host == homeHost) {
+                view.evaluateJavascript(dlJs, null)
+                view.evaluateJavascript(scrollJs, null)
+            }
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
